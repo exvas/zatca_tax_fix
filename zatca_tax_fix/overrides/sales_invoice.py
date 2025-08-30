@@ -18,26 +18,86 @@ class CustomSalesInvoice(SalesInvoice):
         """Override on_submit to handle both ZATCA and GL entry issues"""
         
         # Fix precision issues one final time
-        self.fix_all_precision_issues()
+        self.fix_all_precision_issues(aggressive=True)
+        
+        # Call parent on_submit
+        super().on_submit()
+    
+    def make_gl_entries(self, gl_entries=None, from_repost=False):
+        """Override GL entry creation to fix precision issues"""
+        
+        # Ensure precision is fixed before GL entries
+        self.fix_all_precision_issues(aggressive=True)
+        
+        # Get the GL entries from parent method
+        gl_entries = super().make_gl_entries(gl_entries, from_repost)
+        
+        # Fix any precision issues in the GL entries themselves
+        if gl_entries:
+            self.fix_gl_entries_precision(gl_entries)
+        
+        return gl_entries
+    
+    def fix_gl_entries_precision(self, gl_entries):
+        """Fix precision issues directly in GL entries"""
+        
+        if not gl_entries:
+            return
         
         try:
-            # Call parent on_submit
-            super().on_submit()
-        except frappe.ValidationError as e:
-            if "Debit and Credit not equal" in str(e):
-                frappe.logger().info(f"GL entry error for {self.name}, attempting comprehensive fix...")
+            total_debit = 0
+            total_credit = 0
+            
+            # Round all amounts and calculate totals
+            for entry in gl_entries:
+                if entry.get('debit'):
+                    entry['debit'] = flt(entry['debit'], 2)
+                    total_debit += entry['debit']
                 
-                # Delete any existing GL entries
-                frappe.db.sql("""DELETE FROM `tabGL Entry` WHERE voucher_type = %s AND voucher_no = %s""", 
-                             (self.doctype, self.name))
+                if entry.get('credit'):
+                    entry['credit'] = flt(entry['credit'], 2)
+                    total_credit += entry['credit']
                 
-                # Apply more aggressive precision fix
-                self.fix_all_precision_issues(aggressive=True)
+                # Also fix account currency amounts
+                if entry.get('debit_in_account_currency'):
+                    entry['debit_in_account_currency'] = flt(entry['debit_in_account_currency'], 2)
                 
-                # Retry submission
-                super().on_submit()
-            else:
-                raise
+                if entry.get('credit_in_account_currency'):
+                    entry['credit_in_account_currency'] = flt(entry['credit_in_account_currency'], 2)
+            
+            # Check for imbalance and fix it
+            difference = flt(total_debit - total_credit, 2)
+            
+            if abs(difference) > 0.01:
+                # Find the largest debit or credit entry to adjust
+                largest_entry = None
+                largest_amount = 0
+                
+                for entry in gl_entries:
+                    entry_amount = max(entry.get('debit', 0), entry.get('credit', 0))
+                    if entry_amount > largest_amount:
+                        largest_amount = entry_amount
+                        largest_entry = entry
+                
+                if largest_entry:
+                    if difference > 0:  # More debit, need to increase credit
+                        if largest_entry.get('credit', 0) > 0:
+                            largest_entry['credit'] = flt(largest_entry['credit'] + difference, 2)
+                            if largest_entry.get('credit_in_account_currency'):
+                                largest_entry['credit_in_account_currency'] = flt(
+                                    largest_entry['credit_in_account_currency'] + difference, 2)
+                    else:  # More credit, need to increase debit
+                        if largest_entry.get('debit', 0) > 0:
+                            largest_entry['debit'] = flt(largest_entry['debit'] + abs(difference), 2)
+                            if largest_entry.get('debit_in_account_currency'):
+                                largest_entry['debit_in_account_currency'] = flt(
+                                    largest_entry['debit_in_account_currency'] + abs(difference), 2)
+                
+                frappe.logger().info(f"GL entries adjusted by {difference} for invoice {self.name}")
+            
+        except Exception as e:
+            frappe.logger().error(f"Error fixing GL entries precision: {str(e)}")
+            pass
     
     def fix_all_precision_issues(self, aggressive=False):
         """Comprehensive fix for all precision issues affecting ZATCA and GL entries"""
