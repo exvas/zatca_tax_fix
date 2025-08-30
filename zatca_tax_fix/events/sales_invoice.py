@@ -17,6 +17,12 @@ def validate(doc, method):
     fix_vat_precision(doc)
 
 
+def before_submit(doc, method):
+    """Event handler for Sales Invoice before_submit - Fix GL entry issues"""
+    fix_vat_precision(doc)
+    fix_gl_precision(doc)
+
+
 def fix_vat_precision(doc):
     """Fix VAT precision issues for ZATCA compliance"""
     
@@ -61,4 +67,37 @@ def fix_vat_precision(doc):
             
     except Exception as e:
         frappe.logger().error(f"Error in VAT precision fix: {str(e)}")
+def fix_gl_precision(doc):
+    """Fix GL entry precision issues"""
+    
+    try:
+        # Ensure all amounts that will be used in GL entries are properly rounded
+        if hasattr(doc, 'outstanding_amount'):
+            doc.outstanding_amount = flt(doc.grand_total, 2)
+        
+        if hasattr(doc, 'base_outstanding_amount') and doc.conversion_rate:
+            doc.base_outstanding_amount = flt(doc.outstanding_amount * doc.conversion_rate, 2)
+        
+        # Fix advance payments amounts if any
+        if hasattr(doc, 'advances') and doc.advances:
+            for advance in doc.advances:
+                if advance.allocated_amount:
+                    advance.allocated_amount = flt(advance.allocated_amount, 2)
+        
+        # Ensure tax totals match for GL entries
+        if doc.taxes:
+            recalculated_tax_total = 0
+            for tax in doc.taxes:
+                if tax.tax_amount:
+                    tax.tax_amount = flt(tax.tax_amount, 2)
+                    recalculated_tax_total += tax.tax_amount
+            
+            # Ensure the total matches
+            doc.total_taxes_and_charges = flt(recalculated_tax_total, 2)
+            doc.grand_total = flt(doc.net_total + doc.total_taxes_and_charges, 2)
+        
+        frappe.logger().info(f"GL precision fix applied for {doc.name or 'New'}")
+        
+    except Exception as e:
+        frappe.logger().error(f"Error in GL precision fix: {str(e)}")
         pass
