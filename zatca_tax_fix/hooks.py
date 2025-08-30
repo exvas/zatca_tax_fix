@@ -52,7 +52,19 @@ app_license = "mit"
 # ------------------
 # include app icons in desk
 # app_include_icons = "zatca_tax_fix/public/icons.svg"
+# DocType Class Override - Sales Invoice Only
+override_doctype_class = {
+	"Sales Invoice": "zatca_tax_fix.overrides.sales_invoice.CustomSalesInvoice"
+}
 
+# Document Events - Sales Invoice Only
+doc_events = {
+	"Sales Invoice": {
+		"before_validate": "zatca_tax_fix.events.sales_invoice.before_validate",
+		"before_save": "zatca_tax_fix.events.sales_invoice.before_save",
+		"validate": "zatca_tax_fix.events.sales_invoice.validate"
+	}
+}
 # Home Pages
 # ----------
 
